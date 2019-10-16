@@ -1,3 +1,5 @@
+name := "parallelism-benchmark"
+
 scalaVersion := "2.12.7"
 
 resolvers += "Sonatype OSS Snapshots" at

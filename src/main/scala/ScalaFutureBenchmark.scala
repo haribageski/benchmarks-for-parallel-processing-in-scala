@@ -9,7 +9,6 @@ import org.scalameter.picklers.Implicits._
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
-import scala.reflect.ClassTag
 
 object ScalaFutureBenchmark extends Bench.LocalTime {
 
@@ -37,32 +36,11 @@ object ScalaFutureBenchmark extends Bench.LocalTime {
     i
   }
 
-  def parFold[A: ClassTag](iterable: Iterable[A], monoid: Monoid[A]): Task[A] = {
-    val array: Array[A] = iterable.toArray
-
-    def stackSafeParFold(from: Int, to: Int): Task[A] = {
-      if (from == to) {
-        Task.now(array(from))
-      } else {
-        Task.defer {
-          Task.parMap2(stackSafeParFold(from, (from + to) / 2), stackSafeParFold((from + to) / 2 + 1, to))(monoid.combine)
-        }
-      }
-    }
-
-    if (array.isEmpty) {
-      Task.now(monoid.empty)
-    } else {
-      stackSafeParFold(0, array.length - 1)
-    }
-
-  }
 
   val combinator = new Monoid[Long] {
     override def empty = 0l
     override def combine(x: Long, y: Long) = {
-      timeConsumingOperation(100000l)
-      x - y
+      x
     }
   }
 
@@ -82,7 +60,7 @@ object ScalaFutureBenchmark extends Bench.LocalTime {
   }
 
   performance of "Scala Future" in {
-    performance of "traverse then twice flatMap" config(
+    performance of "map then flatMap over each Future in an Iterable" config(
       Key.exec.minWarmupRuns -> 4,
       Key.exec.maxWarmupRuns -> 4,
       Key.exec.benchRuns -> 10,
@@ -90,10 +68,11 @@ object ScalaFutureBenchmark extends Bench.LocalTime {
     ) in {
       using(Gen.crossProduct(running, iterable)) in {
         r: (Long, Iterable[Int]) =>
+          val futures = r._2.map(_ => Future(timeConsumingOperation(r._1)))
+            .map(_.map(_ => timeConsumingOperation(r._1)))
+            .map(_.flatMap(_ => Future(timeConsumingOperation(r._1))))
           Await.result(
-            Future.traverse(r._2)(_ => Future(timeConsumingOperation(r._1)))
-              .flatMap(iter => Future.traverse(r._2)(_ => Future(timeConsumingOperation(r._1))))
-              .flatMap(iter => Future.traverse(r._2)(_ => Future(timeConsumingOperation(r._1)))),
+            Future.sequence(futures),
             Duration.Inf
           )
       }
@@ -101,7 +80,7 @@ object ScalaFutureBenchmark extends Bench.LocalTime {
   }
 
   performance of "Monix Task" in {
-    performance of "wander then twice flatMap" config(
+    performance of "map then flatMap over each Task in an Iterable using gather" config(
       Key.exec.minWarmupRuns -> 4,
       Key.exec.maxWarmupRuns -> 4,
       Key.exec.benchRuns -> 10,
@@ -109,10 +88,10 @@ object ScalaFutureBenchmark extends Bench.LocalTime {
     ) in {
       using(Gen.crossProduct(running, iterable)) in {
         r: (Long, Iterable[Int]) =>
-          Task.wander(r._2)(_ => Task.eval(timeConsumingOperation(r._1)))
-            .flatMap(Task.wander(_)(_ => Task.eval(timeConsumingOperation(r._1))))
-            .flatMap(Task.wander(_)(_ => Task.eval(timeConsumingOperation(r._1))))
-            .runSyncUnsafe()
+          val tasks = r._2.map(_ => Task.eval(timeConsumingOperation(r._1)))
+            .map(_.map(_ => timeConsumingOperation(r._1)))
+            .map(_.flatMap(_ => Task.eval(timeConsumingOperation(r._1))))
+          Task.gather(tasks).runSyncUnsafe()
       }
     }
   }
@@ -152,6 +131,7 @@ object ScalaFutureBenchmark extends Bench.LocalTime {
       }
     }
   }
+
 
   performance of "ParIterable" in {
     measure method "fold" config(
@@ -194,23 +174,6 @@ object ScalaFutureBenchmark extends Bench.LocalTime {
     override def combine(x: Long, y: Long) = {
       timeConsumingOperation(100000l)
       x - y
-    }
-  }
-
-  performance of "Monix Task" in {
-    measure method "parFolding" config(
-      Key.exec.minWarmupRuns -> 2,
-      Key.exec.maxWarmupRuns -> 2,
-      Key.exec.benchRuns -> 3,
-      Key.verbose -> true
-    ) in {
-      using(running) in {
-        r: (Long) =>
-          parFold(
-            Iterable.range(0l, 100000l),
-            combinerMonoid
-          ).runSyncUnsafe()
-      }
     }
   }
 
