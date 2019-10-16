@@ -1,2 +1,3 @@
-# Benchmarks for Parallel processing in Scala
+# Benchmarks for Parallel processing using Monix, Scala Future, and Scala 
+# parallel collections
 
